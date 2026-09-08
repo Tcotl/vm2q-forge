@@ -1,0 +1,16 @@
+{
+  "0.1.173-9": {
+    "filename": "virtio-win-0.1.173-9.iso",
+    "source_filename": "virtio-win-0.1.173.iso",
+    "url": "https://fedora-virt.repo.nfrance.com/virtio-win/direct-downloads/archive-virtio/virtio-win-0.1.173-9/virtio-win-0.1.173.iso",
+    "size": 393902080,
+    "sha256": null
+  },
+  "0.1.285-1": {
+    "filename": "virtio-win-0.1.285-1.iso",
+    "source_filename": "virtio-win-0.1.285.iso",
+    "url": "https://fedora-virt.repo.nfrance.com/virtio-win/direct-downloads/archive-virtio/virtio-win-0.1.285-1/virtio-win-0.1.285.iso",
+    "size": 789645312,
+    "sha256": null
+  }
+}

@@ -1,0 +1,194 @@
+name: Build VM2Q Forge
+
+on:
+  push:
+    branches: ["main"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-and-wheel:
+    name: Build (${{ matrix.os }}, Python ${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            python-version: "3.10"
+          - os: ubuntu-latest
+            python-version: "3.13"
+          - os: macos-13
+            python-version: "3.12"
+          - os: macos-14
+            python-version: "3.12"
+          - os: windows-latest
+            python-version: "3.12"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - name: Install build extras
+        run: python -m pip install --upgrade pip && python -m pip install ".[build]"
+      - name: Compile
+        run: python -m compileall -q vmware2qcow2 packaging
+      - name: Build wheel and source archive
+        run: python -m build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel-${{ matrix.os }}-py${{ matrix.python-version }}
+          path: dist/*
+
+  portable:
+    name: Portable online CLI (${{ matrix.label }})
+    if: github.event_name != 'pull_request'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            label: linux-amd64
+          - os: ubuntu-24.04-arm
+            label: linux-arm64
+          - os: macos-13
+            label: macos-amd64
+          - os: macos-14
+            label: macos-arm64
+          - os: windows-latest
+            label: windows-amd64
+          - os: windows-11-arm
+            label: windows-arm64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install QEMU on Linux
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-utils
+          dirname "$(command -v qemu-img)" >> "$GITHUB_PATH"
+      - name: Install QEMU on macOS
+        if: runner.os == 'macOS'
+        run: |
+          brew install qemu
+          echo "$(brew --prefix qemu)/bin" >> "$GITHUB_PATH"
+      - name: Install QEMU on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install qemu -y --no-progress
+          $candidates = @(
+            (Join-Path $env:ProgramFiles "qemu\qemu-img.exe"),
+            (Join-Path $env:ProgramFiles "QEMU\qemu-img.exe"),
+            (Join-Path ${env:ProgramFiles(x86)} "qemu\qemu-img.exe"),
+            (Join-Path ${env:ProgramFiles(x86)} "QEMU\qemu-img.exe")
+          )
+          $qemu = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $qemu) {
+            throw "qemu-img.exe was not found after Chocolatey installation"
+          }
+          Split-Path -Parent $qemu | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - name: Install build extras
+        run: python -m pip install --upgrade pip && python -m pip install ".[build]"
+      - name: Build portable bundle
+        run: >
+          python packaging/build_portable.py
+          --output-dir dist/portable
+          --edition online
+          --flavor cli
+      - uses: actions/upload-artifact@v4
+        with:
+          name: portable-${{ matrix.label }}-online-cli
+          path: dist/portable/*.zip
+
+  native-gui:
+    name: Native GUI online (${{ matrix.label }})
+    if: github.event_name != 'pull_request'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            label: macos-arm64
+          - os: windows-latest
+            label: windows-amd64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install QEMU and Tk-enabled Python on macOS
+        if: runner.os == 'macOS'
+        run: |
+          brew install qemu python@3.13 python-tk@3.13
+          echo "$(brew --prefix qemu)/bin" >> "$GITHUB_PATH"
+      - name: Install QEMU on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install qemu -y --no-progress
+          $candidates = @(
+            (Join-Path $env:ProgramFiles "qemu\qemu-img.exe"),
+            (Join-Path $env:ProgramFiles "QEMU\qemu-img.exe"),
+            (Join-Path ${env:ProgramFiles(x86)} "qemu\qemu-img.exe"),
+            (Join-Path ${env:ProgramFiles(x86)} "QEMU\qemu-img.exe")
+          )
+          $qemu = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $qemu) {
+            throw "qemu-img.exe was not found after Chocolatey installation"
+          }
+          Split-Path -Parent $qemu | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - name: Install build extras on macOS
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          "$(brew --prefix python@3.13)/bin/python3.13" -m venv .venv-gui
+          .venv-gui/bin/python -m pip install --upgrade pip
+          .venv-gui/bin/python -m pip install ".[build]"
+          .venv-gui/bin/python - <<'PY'
+          import tkinter
+          print(f"Tk {tkinter.TkVersion} is available")
+          PY
+      - name: Install build extras on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          python -m venv .venv-gui
+          .\.venv-gui\Scripts\python.exe -m pip install --upgrade pip
+          .\.venv-gui\Scripts\python.exe -m pip install ".[build]"
+          .\.venv-gui\Scripts\python.exe -c "import tkinter; print(f'Tk {tkinter.TkVersion} is available')"
+      - name: Build macOS native GUI release
+        if: runner.os == 'macOS'
+        run: >
+          .venv-gui/bin/python packaging/build_gui_release.py
+          --edition online
+          --output-dir dist/gui
+      - name: Build Windows native GUI release
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: >
+          .\.venv-gui\Scripts\python.exe packaging/build_gui_release.py
+          --edition online
+          --output-dir dist/gui
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-gui-${{ matrix.label }}-online
+          path: |
+            dist/gui/*.dmg
+            dist/gui/*.exe
+            dist/gui/*.sha256
+            dist/gui/*-manifest.json
+            dist/gui/*-verification.txt
+          if-no-files-found: error

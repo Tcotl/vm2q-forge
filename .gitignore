@@ -1,0 +1,32 @@
+# Local metadata
+.DS_Store
+.idea/
+.vscode/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+build/
+dist/
+*.spec
+
+# Tests stay local and are not published
+tests/
+work/
+
+# Conversion outputs and large VM artifacts
+outputs/
+runtime/
+assets/drivers/*.iso
+assets/winpe/*.iso
+*.qcow2
+*.vmdk
+*.nvram
+*.lck/
+
+# Driver ISO binaries are supplied locally and are not source files.
+vmware2qcow2/drivers/*.iso
+vmware2qcow2/drivers/winpe-*.iso

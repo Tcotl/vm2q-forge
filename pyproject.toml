@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vm2q-forge"
+version = "0.1.0"
+description = "VMware to qcow2 conversion and VirtIO preparation toolkit."
+requires-python = ">=3.10"
+authors = [{ name = "Codex" }]
+dependencies = []
+
+[project.optional-dependencies]
+build = ["build>=1.2", "pyinstaller>=6.0"]
+
+[project.scripts]
+vmware2qcow2 = "vmware2qcow2.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["vmware2qcow2*"]
+
+[tool.setuptools.package-data]
+vmware2qcow2 = ["drivers/*.iso", "drivers/README.md"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

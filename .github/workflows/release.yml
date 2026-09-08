@@ -1,0 +1,306 @@
+name: Release VM2Q Forge
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  portable:
+    name: ${{ matrix.target.label }} ${{ matrix.edition }} ${{ matrix.flavor }}
+    runs-on: ${{ matrix.target.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - os: ubuntu-latest
+            label: linux-amd64
+          - os: ubuntu-24.04-arm
+            label: linux-arm64
+          - os: macos-13
+            label: macos-amd64
+          - os: macos-14
+            label: macos-arm64
+          - os: windows-latest
+            label: windows-amd64
+          - os: windows-11-arm
+            label: windows-arm64
+        edition: [online, offline]
+        flavor: [cli, gui]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install QEMU on Linux
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-utils qemu-system-x86 python3-tk
+          dirname "$(command -v qemu-img)" >> "$GITHUB_PATH"
+
+      - name: Install QEMU on macOS
+        if: runner.os == 'macOS'
+        run: |
+          brew install qemu
+          echo "$(brew --prefix qemu)/bin" >> "$GITHUB_PATH"
+
+      - name: Install QEMU on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install qemu -y --no-progress
+          $candidates = @(
+            (Join-Path $env:ProgramFiles "qemu\qemu-img.exe"),
+            (Join-Path $env:ProgramFiles "QEMU\qemu-img.exe"),
+            (Join-Path ${env:ProgramFiles(x86)} "qemu\qemu-img.exe"),
+            (Join-Path ${env:ProgramFiles(x86)} "QEMU\qemu-img.exe")
+          )
+          $qemu = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $qemu) {
+            throw "qemu-img.exe was not found after Chocolatey installation"
+          }
+          Split-Path -Parent $qemu | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Install build extras
+        run: python -m pip install --upgrade pip && python -m pip install ".[build]"
+
+      - name: Download offline VirtIO assets
+        if: matrix.edition == 'offline'
+        run: python packaging/fetch_driver_assets.py --output-dir work/driver-assets
+
+      - name: Download prepared WinPE ISO
+        if: matrix.edition == 'offline'
+        env:
+          VM2Q_WINPE_AMD64_URL: ${{ secrets.VM2Q_WINPE_AMD64_URL }}
+          VM2Q_WINPE_AMD64_SHA256: ${{ secrets.VM2Q_WINPE_AMD64_SHA256 }}
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import hashlib
+          import os
+          import urllib.request
+
+          url = os.environ.get("VM2Q_WINPE_AMD64_URL", "").strip()
+          expected = os.environ.get("VM2Q_WINPE_AMD64_SHA256", "").strip().lower()
+          if not url:
+              raise SystemExit(
+                  "VM2Q_WINPE_AMD64_URL secret is required for offline releases"
+              )
+          if not expected:
+              raise SystemExit(
+                  "VM2Q_WINPE_AMD64_SHA256 secret is required for offline releases"
+              )
+
+          output = Path("work/winpe-assets/winpe-amd64.iso")
+          output.parent.mkdir(parents=True, exist_ok=True)
+          urllib.request.urlretrieve(url, output)
+          digest = hashlib.sha256(output.read_bytes()).hexdigest()
+          if digest != expected:
+              raise SystemExit(
+                  f"WinPE SHA-256 mismatch: expected {expected}, got {digest}"
+              )
+          print(f"winpe_iso={output}")
+          PY
+
+      - name: Build online portable bundle
+        if: matrix.edition == 'online'
+        run: >
+          python packaging/build_portable.py
+          --output-dir dist/portable
+          --edition online
+          --flavor ${{ matrix.flavor }}
+
+      - name: Build offline portable bundle
+        if: matrix.edition == 'offline'
+        run: >
+          python packaging/build_portable.py
+          --output-dir dist/portable
+          --edition offline
+          --flavor ${{ matrix.flavor }}
+          --driver-dir work/driver-assets
+          --winpe-iso work/winpe-assets/winpe-amd64.iso
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: VM2Q-Forge-${{ matrix.target.label }}-${{ matrix.edition }}-${{ matrix.flavor }}
+          path: dist/portable/*.zip
+
+  native-gui:
+    name: Native GUI ${{ matrix.target.label }} ${{ matrix.edition }}
+    runs-on: ${{ matrix.target.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - os: macos-14
+            label: macos-arm64
+          - os: windows-latest
+            label: windows-amd64
+        edition: [online, offline]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install QEMU and Tk-enabled Python on macOS
+        if: runner.os == 'macOS'
+        run: |
+          brew install qemu python@3.13 python-tk@3.13
+          echo "$(brew --prefix qemu)/bin" >> "$GITHUB_PATH"
+
+      - name: Install QEMU on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install qemu -y --no-progress
+          $candidates = @(
+            (Join-Path $env:ProgramFiles "qemu\qemu-img.exe"),
+            (Join-Path $env:ProgramFiles "QEMU\qemu-img.exe"),
+            (Join-Path ${env:ProgramFiles(x86)} "qemu\qemu-img.exe"),
+            (Join-Path ${env:ProgramFiles(x86)} "QEMU\qemu-img.exe")
+          )
+          $qemu = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $qemu) {
+            throw "qemu-img.exe was not found after Chocolatey installation"
+          }
+          Split-Path -Parent $qemu | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Install build extras on macOS
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          "$(brew --prefix python@3.13)/bin/python3.13" -m venv .venv-gui
+          .venv-gui/bin/python -m pip install --upgrade pip
+          .venv-gui/bin/python -m pip install ".[build]"
+          .venv-gui/bin/python - <<'PY'
+          import tkinter
+          print(f"Tk {tkinter.TkVersion} is available")
+          PY
+
+      - name: Install build extras on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          python -m venv .venv-gui
+          .\.venv-gui\Scripts\python.exe -m pip install --upgrade pip
+          .\.venv-gui\Scripts\python.exe -m pip install ".[build]"
+          .\.venv-gui\Scripts\python.exe -c "import tkinter; print(f'Tk {tkinter.TkVersion} is available')"
+
+      - name: Download offline VirtIO assets
+        if: matrix.edition == 'offline'
+        run: python packaging/fetch_driver_assets.py --output-dir work/driver-assets
+
+      - name: Download prepared WinPE ISO
+        if: matrix.edition == 'offline'
+        env:
+          VM2Q_WINPE_AMD64_URL: ${{ secrets.VM2Q_WINPE_AMD64_URL }}
+          VM2Q_WINPE_AMD64_SHA256: ${{ secrets.VM2Q_WINPE_AMD64_SHA256 }}
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import hashlib
+          import os
+          import urllib.request
+
+          url = os.environ.get("VM2Q_WINPE_AMD64_URL", "").strip()
+          expected = os.environ.get("VM2Q_WINPE_AMD64_SHA256", "").strip().lower()
+          if not url:
+              raise SystemExit(
+                  "VM2Q_WINPE_AMD64_URL secret is required for offline releases"
+              )
+          if not expected:
+              raise SystemExit(
+                  "VM2Q_WINPE_AMD64_SHA256 secret is required for offline releases"
+              )
+
+          output = Path("work/winpe-assets/winpe-amd64.iso")
+          output.parent.mkdir(parents=True, exist_ok=True)
+          urllib.request.urlretrieve(url, output)
+          digest = hashlib.sha256(output.read_bytes()).hexdigest()
+          if digest != expected:
+              raise SystemExit(
+                  f"WinPE SHA-256 mismatch: expected {expected}, got {digest}"
+              )
+          print(f"winpe_iso={output}")
+          PY
+
+      - name: Build online macOS native GUI release
+        if: matrix.edition == 'online' && runner.os == 'macOS'
+        shell: bash
+        run: >
+          .venv-gui/bin/python packaging/build_gui_release.py
+          --edition online
+          --output-dir dist/gui
+
+      - name: Build online Windows native GUI release
+        if: matrix.edition == 'online' && runner.os == 'Windows'
+        shell: pwsh
+        run: >
+          .\.venv-gui\Scripts\python.exe packaging/build_gui_release.py
+          --edition online
+          --output-dir dist/gui
+
+      - name: Build offline macOS native GUI release
+        if: matrix.edition == 'offline' && runner.os == 'macOS'
+        shell: bash
+        run: >
+          .venv-gui/bin/python packaging/build_gui_release.py
+          --edition offline
+          --offline-profile universal
+          --driver-dir work/driver-assets
+          --winpe-iso work/winpe-assets/winpe-amd64.iso
+          --output-dir dist/gui
+
+      - name: Build offline Windows native GUI release
+        if: matrix.edition == 'offline' && runner.os == 'Windows'
+        shell: pwsh
+        run: >
+          .\.venv-gui\Scripts\python.exe packaging/build_gui_release.py
+          --edition offline
+          --offline-profile universal
+          --driver-dir work/driver-assets
+          --winpe-iso work/winpe-assets/winpe-amd64.iso
+          --output-dir dist/gui
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: VM2Q-Forge-${{ matrix.target.label }}-${{ matrix.edition }}-native-gui
+          path: |
+            dist/gui/*.dmg
+            dist/gui/*.exe
+            dist/gui/*.sha256
+            dist/gui/*-manifest.json
+            dist/gui/*-verification.txt
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub Release
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [portable, native-gui]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release-assets/*.zip
+            release-assets/*.dmg
+            release-assets/*.exe
+            release-assets/*.sha256
+            release-assets/*-manifest.json
+            release-assets/*-verification.txt
+          generate_release_notes: true
